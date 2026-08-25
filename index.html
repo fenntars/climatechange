@@ -53,9 +53,11 @@
     display:grid;
     grid-template-columns:250px 1fr;
     gap:20px;
+    align-items:start;
   }
   @media (max-width: 820px){
     .layout{grid-template-columns:1fr;}
+    .chart-panel{height:420px;}
   }
   .panel{
     background:var(--panel);
@@ -136,7 +138,7 @@
   .chart-panel{
     display:flex;
     flex-direction:column;
-    min-height:520px;
+    height:760px;
   }
   .chart-title{
     font-size:15px;
@@ -151,13 +153,13 @@
   .chart-holder{
     position:relative;
     flex:1;
-    min-height:420px;
+    min-height:0;
   }
   .empty-state{
     display:flex;
     align-items:center;
     justify-content:center;
-    height:420px;
+    height:100%;
     color:var(--text-muted);
     font-size:14px;
     text-align:center;
@@ -197,6 +199,17 @@
         </label>
         <p style="font-size:12px;color:var(--text-muted);margin:8px 2px 0 2px;">
           Csak az évi középhőmérsékletnél és a csapadékösszegnél érhető el, az öt magyar városnál. A többi mutatót és a Globális/Európa referenciát nem érinti.
+        </p>
+      </div>
+
+      <div class="panel">
+        <h2>Illesztés</h2>
+        <label class="city-item" for="alignToggle" style="cursor:pointer;">
+          <input type="checkbox" id="alignToggle">
+          <span>Adatsorok illesztése (divergencia)</span>
+        </label>
+        <p style="font-size:12px;color:var(--text-muted);margin:8px 2px 0 2px;">
+          Megkeresi a kiválasztott sorok első közös évét, ott mindegyiket 0-ra állítja, és onnantól az eltérést (divergenciát) mutatja — így eltérő alapszintű sorok (pl. városi hőmérséklet vs. anomália) trendje közvetlenül összevethető.
         </p>
       </div>
 
@@ -283,7 +296,8 @@
     cities: CITY_ORDER.slice(),       // all selected by default
     metric: "tavg",
     view: "raw",
-    useHomog: false
+    useHomog: true,
+    align: false
   };
 
   var chart = null;
@@ -432,6 +446,15 @@
     });
   }
 
+  function buildAlignToggle() {
+    var toggle = document.getElementById("alignToggle");
+    toggle.checked = state.align;
+    toggle.addEventListener("change", function () {
+      state.align = toggle.checked;
+      render();
+    });
+  }
+
   function buildViewTabs() {
     var holder = document.getElementById("viewTabs");
     holder.innerHTML = "";
@@ -466,6 +489,45 @@
       if (VIEWS[i].key === key) return VIEWS[i];
     }
     return VIEWS[0];
+  }
+
+  function applyAlignment(datasets) {
+    // Build year -> value maps (non-null only) for each dataset that has data.
+    var maps = datasets
+      .filter(function (ds) { return ds.data.length > 0; })
+      .map(function (ds) {
+        var m = {};
+        ds.data.forEach(function (p) { if (p.y !== null) m[p.x] = p.y; });
+        return m;
+      });
+
+    if (maps.length === 0) return { anchorYear: null };
+
+    // Intersection of years present (non-null) in every map.
+    var candidateYears = Object.keys(maps[0]).map(Number);
+    var commonYears = candidateYears.filter(function (yr) {
+      return maps.every(function (m) { return Object.prototype.hasOwnProperty.call(m, yr); });
+    });
+
+    if (commonYears.length === 0) return { anchorYear: null };
+
+    var anchorYear = Math.min.apply(null, commonYears);
+
+    datasets.forEach(function (ds) {
+      if (ds.data.length === 0) return;
+      var anchorValue = null;
+      for (var i = 0; i < ds.data.length; i++) {
+        if (ds.data[i].x === anchorYear) { anchorValue = ds.data[i].y; break; }
+      }
+      if (anchorValue === null) return;
+      ds.data = ds.data
+        .filter(function (p) { return p.x >= anchorYear; })
+        .map(function (p) {
+          return { x: p.x, y: p.y === null ? null : (p.y - anchorValue) };
+        });
+    });
+
+    return { anchorYear: anchorYear };
   }
 
   function render() {
@@ -537,6 +599,16 @@
       yTitle += "  /  hőmérséklet-anomália [°C]";
     }
 
+    if (state.align) {
+      var alignInfo = applyAlignment(datasets);
+      if (alignInfo.anchorYear !== null) {
+        yTitle = "Eltérés " + alignInfo.anchorYear + "-hez képest [Δ]";
+        noteEl.textContent += " · Illesztve: mindegyik kiválasztott sor 0-ra van állítva " + alignInfo.anchorYear + "-ben (az első közös adatpontjukban), az ábra az onnantól vett eltérést mutatja.";
+      } else {
+        noteEl.textContent += " · Nincs közös adatpont a kiválasztott soroknál — illesztés nélkül, az eredeti értékek látszanak.";
+      }
+    }
+
     if (chart) {
       chart.data.datasets = datasets;
       chart.options.scales.y.title.text = yTitle;
@@ -560,6 +632,9 @@
           tooltip: {
             titleFont: { family: "Arial" },
             bodyFont: { family: "Arial" },
+            itemSort: function (a, b) {
+              return b.parsed.y - a.parsed.y;
+            },
             callbacks: {
               title: function (items) {
                 return items.length ? String(items[0].parsed.x) : "";
@@ -589,6 +664,7 @@
   buildCityList();
   buildMetricSelect();
   buildHomogToggle();
+  buildAlignToggle();
   buildViewTabs();
   render();
 })();
